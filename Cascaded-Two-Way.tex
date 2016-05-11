@@ -1,0 +1,47 @@
+\chapter{\label{cha:two-way}Cascaded Two Way Join}
+An edge $(a,r,b)$ could be modelled as an instance of binary relation $R(A,B)$, and $S(B,C)$ for edge $(b,s,c)$. Then the searching process for a path from $a$ to $c$ in two steps could be expressed as a two way join process $R(a,b) \bowtie S(b,c)$. In Map-Reduce or Spark environment, the popular implementation is to map tuple $(a,b)$ and $(b,c)$ to key-value pairs $(b,(a,b))$ and $(b,(b,c))$, then reduce by key b. Specifically, the Join operation in Spark basically encapsulates the map-reduce process of two-way join.
+\section{Query Plan}
+In searching algorithm for regular path query, every search variable $A$ or $B$ in above cases consists of two nodes: one in graph and the other in automata. The two-way join operation could be expressed as follows:
+\begin{enumerate}
+    \item If there exists an edge $(1,r,2)$ in automata and an edge from $(a,r,b)$ with same label in graph, we can take the super-edge $((1,a),r,(2,b))$ as an instance of a binary relation $R(A,B)$, where $A$ and $B$ are search states variables. Similarly, we can get a super-edge $((2,b),s,(3,c))$ for the binary relation $S(B,C)$.
+    \item Map super-edges to $((2,b),(1,a))$ and $((2,b),(3,c))$ key-value pairs with $(2,b)$ as the keys and $(1,a)$ or $(3,c)$ as values.
+    \item Reduce two pairs by keys and combine values to new search states $((1,a),(3,c))$. Here we define the search states as a pair of two pairs, each of which contains  starting or current nodes in automata and graph.
+\end{enumerate}
+By now, there is only data parallelism in this process. In order to increase the power of parallelism, we can safely aggregate some edges with different labels to the same relation, which leads to query parallelism to some extent. In order to achieve that, we conduct a breadth first search on the automaton, and assign edges of each iteration to corresponding steps in the query plan.\\
+For example, the query plan for automata in Figure \ref{fig:example-automata} is in table \ref{query-plan-example}.
+\begin{table}[h!]
+\centering
+\caption{Query Plan Example}
+\label{query-plan-example}
+\begin{tabular}{ll}
+step & edges                                                                 \\
+0    & \begin{tabular}[c]{@{}l@{}}(0,LOVES,1) (0,KNOWS,2)\end{tabular}     \\
+1    & \begin{tabular}[c]{@{}l@{}}(2,KNOWS,2) (1,CODED\_BY,3) (2,CODED\_BY,3)\end{tabular}                                                         \\
+2    & \begin{tabular}[c]{@{}l@{}}(2,KNOWS,2) (2,CODED\_BY,3)\end{tabular} \\
+3    &  \begin{tabular}[c]{@{}l@{}}(2,KNOWS,2) (2,CODED\_BY,3)\end{tabular}\\
+4    & ...                                                                  
+\end{tabular}
+\end{table}
+\\Then the whole search process is modelled as cascaded two-way joins:
+$$(((R_0(A_0,A_1)\bowtie R_1(A_1,A_2))\bowtie R_2(A_2,A_3))\bowtie R_3(A_2,A_3))\bowtie...$$
+where each $R_i$ contains edges of step i in query plan and $A_i$ represents pairs of nodes $(node_{automata},node)$. Note that the search will not end at stopping states of the automaton as there might be more edges starting from them.\\
+The work $W(|V|)$ of this algorithm is $O((|V||S|)^2)$ where V is number of nodes in graph and S is number of states in the automaton. The time step $T_p = O(N)$ where $N$ is the number of relations $R_i$.\\
+Assume $r_i$ is the size of relation $R_i$ and the match probability with $R_{i+1}$ is $p_{i}$, the input of first step is $r_1+r_2$, the output is $r_1*r_2*p_1$. The input for second step is of size $r_1*r_2*p_1+r_3$, the output size is $r_1*r_2*r_3*p_1*p_2$ ..., so the final input size is $\prod_1^{N-2}{r_i}*r_{N-1}+r_{N}$ and output size is $\prod_1^{N-1}{r_i p_i} *r_N$. The total network communication then is bounded by the sum of all the input and output sizes.
+
+\section{Execution Process}
+The execution process of cascaded two-way joins implemented in Apache Spark is as in diagram \ref{fig:two-way-join-spark}:
+\begin{figure}[h!]
+  \caption{Execution Process of Two-Way Join}
+  \label{fig:two-way-join-spark}
+  \centering
+    \includegraphics[width=1.0\textwidth]{img/Two-way-join}
+\end{figure}
+\\The diagram depicts the main data-sets and the transform/action operation in Spark. As it's assumed that the graph cannot be loaded into memory at once, edges are loaded from HBase and stored in Resilient Distributed Dataset (RDD) only when they are needed. The process can be described in following steps: 
+\begin{enumerate}
+    \item Load automata edges from starting states in HDFS and retrieve edges which have same labels in HBase. Then join two RDD by labels, merge values to an RDD of search states. Use the dstid (Destination ID) in graph and automata as key.
+    \item Count the size of search states RDD. If this equals 0, stop searching. Otherwise, filter those search states which begin with starting state and end in stopping states in automata. Merge the CurrentStates to VisitedStates by Union operation in Spark.
+    \item Load Edges in automata for next step in the query plan, then retrieve graph edges by labels. Join two RDD by keys and merge values into a new RDD of search states with starting states as key.
+    \item Join the two RDDs containing states of the current step and the next step, put the results into CurrentStates, using dstid as key.
+    \item Subtract VisitedStates from CurrentStates, then go back to step 2.
+\end{enumerate}
+Since the number of transitions in the automaton is relatively small (less than 100), the main possible bottleneck is step 4, where two RDD of searching states are joined. As we use search state as key, the maximum number of reducing task is $(|V||S|)^2$ in step 4 every time. The RDD marked with red color is the one that got cached as it's referenced for several times and we don't want to recalculate it consistently.

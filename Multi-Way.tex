@@ -1,0 +1,109 @@
+\chapter{\label{cha:multi-way}Multi-Way Join}
+Similar to the Cascaded 2-way Join, the Multi-way Join searches by joining search states, except the it joins several relations at once.\\
+Recall the number of reducing task is $(|V||S|)^2$ in every 2-way join step, if every state is a distinct key, the number of reducing tasks can be really huge: $O((|V||S|)^{2N})$ where $N$ is the number of relations $R_i$.\\ 
+Afrati and Ullman\cite{afrati2010optimizing} solved this problem by giving each variable $A_i$ in relation a bucket number and setting their product equal to a given number $k$, which is usually the number of processors. Assume there are $N$ variables, then the key for each reducing process would consist of $N$ sub-keys. Each sub-keys $sb_i$ ranges from 1 to the bucket size $a_i$ for shared variable $A_i$.\\
+For a relation instance $R_i(t_{i-1},t_i)$, the corresponding bucket is $(h(t_{i-1}),h(t_i))$ where $h$ is a hash function. As a consequence, the tuple $(t_{i-1},t_{i})$ is dispatched to all processes with sub-key $(h(t_{i-1}),h(t_i))$. As each edge would be broadcasted to several reducing processes, there is data redundancy during the process. The number of tuples passed to Reduce processes is:
+$$\sum\tau_i$$
+where $\tau_i$ is the product of $r_i$ (the number of tuples in $R_i$) times the product of those bucket sizes $a_j$ such that $A_j$ does not appear in the schema of $R_i$.
+ After distributing all edges, each reduce task conducts cascaded joins locally. As it's crucial to decide number of buckets for each variable $A_i$ based on the size of each relation $R_i$, a Lagrangean equation is used to tackle the problem. Many formulas are given for different join types in Afrati's work, and regular path query evaluation can be modelled as chained mode:
+$$R_0(A_0,A_1)\bowtie R_1(A_1,A_2)\bowtie R_2(A_2,A_3)\bowtie R_3(A_2,A_3)\bowtie...$$
+The original Lagrangean equation for chain joins are as followed:
+$$A_1 => \tau_3 + \tau_4 + ... + \tau_n = \lambda k$$
+$$A_2 => \tau_1 + \tau_4 + ... + \tau_n = \lambda k$$
+$$A_3 => \tau_1 + \tau_2 + \tau_5 + ... + \tau_n = \lambda k$$
+$$A_4 => \tau_1 + \tau_2 + \tau_3 + \tau_6... + \tau_n = \lambda k$$
+$$...$$
+ Each variable $A_i$ has a differential equation, and by subtracting each equation with the former one, the following equations will be constructed:
+$$\tau_1 = \tau_3 = \tau_5 = ...$$
+$$\tau_2 = \tau_4 = \tau_6 = ...$$
+and by applying the definitions of $\tau_i$, we get the following result for even $n$:
+$$\frac{r_1}{a_1} = \frac{r_3}{a_2a_3} = \frac{r_5}{a_4a_5} = ... = \frac{r_{n-1}}{a_{n-2}a_{n-1}}$$
+$$\frac{r_2}{a_1a_2} = \frac{r_4}{a_3a_4} = \frac{r_6}{a_5a_6} = ... = \frac{r_{n}}{a_{n-1}}$$
+The formula for odd n is similar and will be discussed later.\\
+According to Afrati's work\cite{afrati2010optimizing}, the $a_2$ for even-n is:
+$$a_2 = (\prod_{j=2}^{n/2}\frac{r_2r_{2j-1}}{r_1r_{2j}})^{2/n}$$
+The $a_2$ only depends on length of chain, which means $a_2$ is a known value immediately. The formula to calculate $a_{2i}$ is:
+$$a_{2i} = (a_2)^i\prod_{j=2}^i\frac{r_1r_{2j}}{r_2r_{2j-1}}$$
+which implies all even subscripts variable are known values. The formula for $a_{2i+1}$ is:
+$$a_{2i+1} = \frac{a_1r_{2i+1}}{r_1a_{2i}}$$
+In the end, the product of the shared variables could be written in form of $a_1$:
+$$k = a_1^{n/2}\prod_{j=1}^{\frac{n-2}{2}}\frac{r_{2j+1}}{r_1}$$
+Formulas for variables in odd-n in terms of $a_2$ are:
+$$a_{2i} = (a_2)^i\prod_{j=2}^i\frac{r_1r_{2j}}{r_2r_{2j-1}}$$
+$$a_{n-2i} = (a_2)^i\prod_{j=1}^i\frac{r_1r_{n-2j+1}}{r_2r_{n-2j+2}}$$
+The product in terms of $a_2$ will be:
+$$k = (\frac{a_2r_1}{r_2})^{\frac{n^2-1}{4}}\prod_{i=1}^{\frac{n-1}{2}}\prod_{j=1}^{i}\frac{r_{2j}r_{n-2j+1}}{r_{2j-1}r_{n-2j+2}}$$
+\section{Removing Recurrence}
+When dealing with recursive queries, the number of relations or query plan steps is unknown. For cascaded 2-way join, it's not necessary to calculate the number of edges in next step until finishing current iteration, so this is not a problem as application always know when to stop. However, we need number of $R_i$ and their size $r_i$ to solve Lagrangean equations in multi-way join, which requires a known query plan before start searching process.\\
+The solution is to find the a spanning arborescence, which is a rooted and directed tree, where there's exactly one path from root to every other node. We find the arborescence of minimum weight of automata, which leads to a known query plan, and conduct cascaded 2-way joins between the search result of arborescence and the rest edges in automata.\\
+For instance, the automata in \ref{fig:example-automata} can be compiled as followed:
+\begin{table}[h!]
+\centering
+\caption{Query Plan Example For Multi-way Join}
+\label{query-plan-multiway-example}
+\begin{tabular}{ll}
+step & edges                                                                 \\
+0    & \begin{tabular}[c]{@{}l@{}}(0,LOVES,1) (0,KNOWS,2) (1,CODED\_BY,3)\end{tabular}     \\
+1    & \begin{tabular}[c]{@{}l@{}}(2,KNOWS,2) (2,CODED\_BY,3)\end{tabular}                                                         \\
+2    & \begin{tabular}[c]{@{}l@{}}(2,KNOWS,2) (2,CODED\_BY,3)\end{tabular} \\
+3    &  \begin{tabular}[c]{@{}l@{}}(2,KNOWS,2) (2,CODED\_BY,3)\end{tabular}\\
+4    & ...                                                                  
+\end{tabular}
+\end{table}
+\\In step 0, the edges are from minimum spanning arborescence, and are joined in one go.
+As a side effect of cascaded 2-way join in each reduce task, the visited states of each task are yielded. The states which end at the starting state in the next step are filtered from visited states. In this example, all states which end at state 2 are filtered and used for the starting states in step 1, as all edges there start with state 2.
+\section{With Shared Variable Less Than 1}
+One issue while solving those equations is that in some solutions some variables are less than 1, which is meaningless as we need positive integers for the bucket size.\\
+Assume one shared variable $a_i$ is less than 1, then we set it to be 1 and remove it from map-key. If two consecutive variables $a_{i-1}$ and $a_{i}$ are less than 1 at the same time, $R_i$ will be removed from the calculation as all edges of $R_i$ should be broadcasted to all processes. Assume after removing consecutive variables and corresponding relation, each relation should at most have one variable less than 1. It's natural to cut the original chain into two sub-chains by variable less than 1. The Lagrangean equations are modified as followed after removing the equation of $a_i$:
+$$a_1 => \tau_3 + \tau_4 + ... + \tau_n = \lambda k$$
+$$a_2 => \tau_1 + \tau_4 + ... + \tau_n = \lambda k$$
+$$a_3 => \tau_1 + \tau_2 + \tau_5 + ... + \tau_n = \lambda k$$
+$$...$$
+$$a_{i-1} => \tau_1 + \tau_2 + ... \tau_{i-2} + \tau_{i+1} + ... + \tau_n = \lambda k$$
+$$a_{i+1} => \tau_1 + \tau_2 + ... \tau_{i} + \tau_{i+3} + ... + \tau_n = \lambda k$$
+$$...$$
+As a result the two equations $\tau_{i-1} = \tau_{i+1}$ and $\tau_{i} = \tau_{i+2}$ will not hold anymore, instead if we subtract equations of $a_{i-1}$ and $a_{i+1}$, a new equation will be formed:
+$$\tau_{i-1} + \tau_{i} = \tau_{i+1} + \tau_{i+2}$$
+which could be rewritten as:
+$$\tau_{1} + \tau_{2} = \tau_{i+1} + \tau_{i+2}$$
+In general we have one less equation as well as one less variable, so the equations for shared variables are still solvable.\\
+The equations for shared variable would be like followed with even i:
+$$\frac{r_1}{a_1} = \frac{r_3}{a_2a_3} = ... =  \frac{r_{i-1}}{a_{i-2}a_{i-1}} \neq \frac{r_{i+1}}{a_{i+1}} = ... = \frac{r_{n-1}}{a_{n-2}a_{n-1}}$$
+$$\frac{r_2}{a_1a_2} = \frac{r_4}{a_3a_4} = ... = \frac{r_i}{a_{i-1}} \neq \frac{r_{i+2}}{a_{i+1}a_{i+2}} = ... = \frac{r_{n}}{a_{n-1}}$$
+When solving equation $\tau_{1} + \tau_{2} = \tau_{i+1} + \tau_{i+2}$, there are three cases for the length of each sub-chain: EVEN-EVEN, ODD-ODD and EVEN-ODD(ODD-EVEN).
+For a sub-chain of even length, the $\tau_{1} + \tau_{2}$ can be expressed as $\frac{r_1+r_2/a_2}{a_1}$. Since $a_2$ is a known value, the result only depends on value of $a_1$.\\
+For a sub-chain of odd length, the $\tau_{1} + \tau_{2}$ is $ C* ( r_1/a_2^{(n-1)/2}+r_2/a_2^{(n+1)/2} )$ where $C = \prod_{j=1}^{\frac{n-1}{2}}\frac{r_1r_{n-2j+1}}{r_2r_{n-2j+2}}$ and n is the length of sub-chain.\\
+With the formulas above, it's possible to solve the equation $\tau_{1} + \tau_{2} = \tau_{i+1} + \tau_{i+2}$ between representative shared variable in sub-chains, which could be either $a_1$ or $a_2$ according to the length of sub-chain:
+$$EVEN-EVEN : \frac{r_1+r_2/a_2}{a_1} = \frac{r_{i+1}+r_{i+2}/a_{i+2}}{a_{i+1}}$$
+$$ODD-ODD :C_1* ( r_1/a_2^{(i-1)/2}+r_2/a_2^{(i+1)/2} ) = C_2* ( r_{i+1}/a_{i+2}^{(n-i-1)/2}+r_{i+2}/a_{i+2}^{(n-i+1)/2} ) $$
+$$EVEN-ODD : \frac{r_1+r_2/a_2}{a_1} = C_2* ( r_{i+1}/a_{i+2}^{(n-i-1)/2}+r_{i+2}/a_{i+2}^{(n-i+1)/2} )$$
+The ODD-EVEN situation is similar to EVEN-ODD, in which case we just need to swap the content on different sides.\\
+For example, in the case of EVEN-EVEN, it's possible to represent sub-product of each sub-chain in the form of only one variable $a_1$ and equal the product of sub-products to k:
+$$k = a_1^{i/2}\prod_{j=1}^{\frac{i-2}{2}}\frac{r_{2j+1}}{r_1}*(\frac{r_{i+1}+r_{i+2}/a_{i+2}}{r_1+r_2/a_2}a_1)^{(n-i)/2}\prod_{j=1}^{\frac{n-i-2}{2}}\frac{r_{i+2j+1}}{r_{i+1}}$$
+After solving the value of $a_1$, $a_{i+1}$ can be calculated, thus all variables in sub-chains can be obtained.\\
+For example, the query $ [1]^*[0][471][0][1]^+$ for Alibaba Benchmark, can be compiled into a query plan of 4 relations. The tuple of sizes is $(332642,2,306617,26025)$, for the first iteration, the shared variables are $(1.0,11.784072,0.008416,1290.581264,1.0)$ respectively assuming $k=128$. The first and last variable are set to $1.0$ as they are dominated. However, the $a_2$ is much less than 1 and $a_3$ is much larger than $k$. This is caused by the massive difference between the relation size of $r_2=2$ and other relations. According to the method above, we remove $a_2$ and recalculate the shared variables. The new tuple is $(1.0,11.313741,1.0,11.313741,1.0)$, which can be rounded to $(1.0,12.0,1.0,12.0,1.0)$. The product of all shared variables is slightly larger than $k$, which is tolerable here. Then, for shared variables $a_1$ and $a_3$, the bucket sizes are both 12, and every other variable only has one bucket.
+\subsubsection{General Cases}
+In case there are multiple variables $a_{i_1},a_{i_2}...a_{i_m}$ which are less than 1, the chain join will be cut into several sub-chains. The similar process will be applied to every sub-chain and its following sub-chain. Then the product of sub-products can be expressed in form of $a_1$ and equals to k. With solved $a_1$ or $a_2$, the values $a_{i_1+1},a_{i_2+2}...,a_{i_m+1}$ can be calculated from EVEN-EVEN, ODD-ODD or EVEN-ODD formula one by one.
+\subsubsection{Implementation}
+Basically there are two ways to implement with shared variables less than 1:
+\begin{enumerate}
+\item Split $k$ and dispatch results to sub-chains. For example, if $k$ = 64, we assign $k_1 = 8$ and $k_2 = 8$ to each sub-chain. This is easier for coding but not really accurate. In fact the connection between different sub-chains are cut off and we are solving completely different sub-problems.
+\item Binary search the value of $a_1$ or $a_2$ between 1 and $k$. For the variables on different sides in EVEN-EVEN, ODD-ODD or EVEN-ODD formulas, they are monotonic with each other, which makes binary search applicable. Every time we assign a value to $a_1$ or $a_2$ and then get temporary $a_{i+1}$ or $a_{i+2}$, leading to sub-product $k_1$ and $k_2$. Then we adjust the value of $a_1$ or $a_2$ after checking the relation between $k_1*k_2$ and k.
+\end{enumerate}
+\section{Execution Process}
+The execution process of cascaded multi-way joins implemented in Apache Spark is as in diagram \ref{fig:multi-way-join-spark}:
+\begin{figure}[h!]
+  \caption{Execution Process of Multi-Way Join}
+  \label{fig:multi-way-join-spark}
+  \centering
+    \includegraphics[width=0.8\textwidth]{img/Multi-way-join-process}
+\end{figure}
+\begin{enumerate}
+    \item Load all edges in automata to RDD, named as AllTransitions. Retrieve edges from HBase to RDD by edge labels in AllTransitions, naming the RDD AllEdges with the edge label as key.
+    \item Build arborescence based on AllTransitions and join with AllEdges, which yields the states before break points in automata. We call the new RDD AllStates. As the same edge can be used in multiple relations, we set the step number in query plan as the key.
+    \item With the help of a histogram of labels, we can compile the query plan and calculate bucket sizes for each query step according to formulas. The bucket numbers form the key space and are flat-mapped with AllStates.
+    \item Dispatch states to reduce tasks according to $(h((dstid,dstid)),h((srcid,srcid)))$.
+    \item Each reduce task conducts local cascaded search and stores all visited states into VisitedStates.
+    \item Now the Multi-way Join part is almost done, after which a parallel cascaded 2-way join will be applied to states starting from break points in the automaton. All Edges and AllTransitions are still used in cascaded 2-way join as it's possible to search back to edges in the Arborescence RDD. VisitedStates is also referred in cascaded 2-way join for removing duplicate states.
+    \item Finally, with all produced VisitedStates, we filter all search states that begin with start states and end at stop states in the automaton.
+\end{enumerate}

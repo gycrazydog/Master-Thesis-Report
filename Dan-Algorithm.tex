@@ -1,0 +1,134 @@
+\chapter{\label{cha:dan-alg}Dan Suciu's Algorithm}
+When testing previous two algorithms against 1000 random simple queries without recursion from Alibaba dataset, it's observed that shuffle size can already be as large as several GBs. The reason behind it is that "join" transformation is a reduce-side join operation, so full shuffles happen a lot while joining states or edges. Recall the system architecture in Chapter \ref{cha:exp-set}, it would be great if we can make use of data locality during evaluation and reduce shuffling by doing local computation as much as possible.\\
+Furthermore, the query parallelization in previous two algorithms is only considered when compiling a query plan where multiple edges are put into a single query step. However, the search still begins with the starting state of the automaton. It could be faster to start searching for multiple starting points when we have adequate computing resources.
+\section{Epsilon Edges}
+One trick to store and traverse graph in a distributed context is drawing cross-edges back into local partitions and adding epsilon edges between different sites. The example in Figure \ref{fig:empty-edges} explains the basic idea: for cross-edges $(u_1,v_1), (u_1,v_2), (u_2,v_2), (u_3,v_1)$ and $(u_3,v_3)$, we create virtual nodes $v_1', v_2'$ and $v_3'$ in red site, and adding epsilon edges between them and corresponding nodes in other sites.
+\begin{figure}[h!]
+  \caption{Adding Epsilon Edges between Sites}
+  \label{fig:empty-edges}
+  \centering
+    \includegraphics[width=0.8\textwidth]{img/empty-edges}
+\end{figure}
+\\This partitioning technique can also be interpreted as vertex-cuts, which is adopted by popular graph processing frameworks such as GraphLab\cite{low2012distributed} and GraphX\cite{xin2013graphx}. By constraining every edge in a certain site, it's possible to achieve data and computation locality, which Dan Suciu's algorithm is based on.
+\section{Original Dan Suciu's Algorithm}
+In \cite{suciu2002distributed}, an algorithm is proposed by Dan Suciu to solve regular path queries on distributed rooted semi-structured data, and return all paths satisfying the RPQ. The algorithm is described in Algorithm 1:
+\begin{algorithm}
+    \SetKwInOut{Input}{Input}
+    \SetKwInOut{Output}{Output}
+    \Input{A semistructured database db distributed on a number of sites: db = $\cup_{\alpha}db_{\alpha}$, a regular path query R whose automaton is A}
+    \Output{All paths t which satisfy R}
+    initialization\;
+    \textbf{Step 1} \\Send A to all servers $\alpha$, $\alpha = 1,...,m$\\
+    \textbf{Step 2} \\At every site $\alpha$ let $F_a$ be $db_a$:\\
+                        $Node(F_a)\leftarrow Node(db_a)$
+                        $InputNode(F_a)\leftarrow InputNode(db_a)$
+                        $Edges(F_a)\leftarrow Edges(db_a)$
+                        $OutputNode(F_a)\leftarrow OutputNode(db_a)$
+                        $visited_a\leftarrow\{\}$ \\
+                    \ForAll {$r\in InputNodes(db_a),s\in States(A)$}{
+                        $S\leftarrow visit_a(s,r) $\\
+                        $InputNodes(F_a)\leftarrow InputNodes(F_a)\cup \{(s,r)\}$\\
+                        \ForAll {$p\in S$}{
+                            $Edges(F_a) \leftarrow Edges(F_a)\cup \{(s,r) \xrightarrow{\epsilon} p\}$
+                        }
+                    }
+    \textbf{Step 3} \\At every Site $\alpha$ construct the accessibility graph for $F_a$.\\
+    \textbf{Step 4} \\Every site $\alpha$ sends it accessibility graph to the master and compute the global accessibility graph at the master site.\\
+    \textbf{Step 5} \\Broadcast the global accessibility graph to every server $\alpha$, $\alpha = 1,...,m$.\\
+    \textbf{Step 6} \\Every site $\alpha$ computes $F_a^{acc}$, the accessible part of $F_a$.\\
+    \textbf{Step 7} \\Every site $\alpha$ sends $F_a^{acc}$ to the master site, where it is assembled into result.
+    \caption{Dan Scuciu's Algorithm}
+\end{algorithm}
+\begin{algorithm}
+    \SetKwInOut{Input}{Input}
+    \SetKwInOut{Output}{Output}
+    \Input{A state $s$ in automata and a node $u$ in graph}
+    \Output{A set of states which $(s,u)$ can reach in current site $\alpha$}
+    \lIf{$(s,u)\in visited_a$}{
+        \Return $result_a[s,u]$
+    }
+    $visited_a\leftarrow visited_a\cup \{(s,u)\}$\\
+    $result_a[s,u]\leftarrow\{\}$\\
+    \If{$u\in OutputNode_a(db_a)$}{
+        $OutputNode_a(F_a)\leftarrow OutputNode_a(db_a)\cup \{(s,u)\}$\\
+        $result_a[s,u]\leftarrow result_a[s,u]\cup \{(s,u)\} $
+    }
+    \lElseIf{ $s$ is a terminal state}{
+        $result_a[s,u]\leftarrow \{u\} $
+    }
+    \ForAll{$u\xrightarrow{a}v$ in $Edges(db_a)$}{
+        \lIf{$a=\epsilon$}{$result_a[s,u]\leftarrow result_a[s,u]\cup visited_a(s,v) $}
+        \Else{
+            \ForAll{$s\xrightarrow{P}s'$(*automata transition*)}{
+                \If{$P(a)$}{$result_a[s,u]\leftarrow result_a[s,u]\cup visited_a(s',v) $}
+            }
+        }
+    }
+    \Return $result_a[s,u]$
+    \caption{function $visited_a(s,u)$}
+\end{algorithm}
+\\Before running Algorithm 1, the graph is partitioned by the vertex cut approach. Theoretically there are only $\epsilon$ edges between different sites. In Algorithm 1,  step 1 broadcast edges of automata to all servers. Step 2 locates all $InputNodes$ and $OutputNodes$ in vertex-cut partitioned graph. Making use of Algorithm 2, every site starts visiting search states $(s,u)$ consisting of every input-node $u$ and every state in the automaton $s$, to states with ouput-node or final state in the automaton. For all states $(t,v)$ which can be reached from input search states $(s,u)$, we add $\epsilon$ edge between them. Similar to our approaches in previous sections, the accessibility graph constructed are formed by pairs $((s_i,u_i),(t_i,v_i))$. In step 4, we receive $\cup F_i,i=1,2,3...,m$ from all sites and conduct searching from root state $(s_1,r)$ to $(f,dstid)$ on it, where r is the root for $db$, $s_1$ is the starting state in the automaton and $f$ is the final state of the automaton. After computing the global accessibility graph, each state of which can be part of paths from $(s_1,r)$ to $(f,dstid)$, the global accessibility graph will be sent back to all servers in step 5. In step 6, each sites send back all paths in own site satisfying part of global accessibility graph and transmit them back to the master site in step 7. Finally, the master assembles all paths from $(s_1,r)$ to $(f,dstid)$.\\
+As mentioned in research background, the main advantages of Dan Suciu's algorithm are:
+\begin{enumerate}
+    \item Known number of 4 communication steps, which are step 1, 4, 5, and 7.
+    \item Total amount of data exchanged during communications has size $O(n^2)+O(r)$, where $n$ is the number of cross-edges (step 4) and r is the size of the query result (step 7).
+\end{enumerate}
+\section{Modified Dan Suciu's Algorithm}
+The main differences between our RPQ definition and Dan Suciu's are as followed:
+\begin{enumerate}
+    \item The graphs we process are not necessarily rooted.
+    \item We only need the pairs of starting and ending nodes, not all paths between them.
+\end{enumerate}
+For the first difference, we can add more starting states in step 2, and for the second one, we can remove step 5-7 from algorithm 1. Then the modified algorithm can be described as in Algorithm 3:
+\begin{algorithm}
+    \SetKwInOut{Input}{Input}
+    \SetKwInOut{Output}{Output}
+    \Input{A semistructured database db distributed on a number of sites: db = $\cup_{\alpha}db_{\alpha}$, a regular path query R whose automaton is A}
+    \Output{All paths t which satisfy R}
+    initialization\;
+    \textbf{Step 1} \\Send A to all servers $\alpha$, $\alpha = 1,...,m$\\
+    \textbf{Step 2} \\At every site $\alpha$ let $F_a$ be $db_a$:\\
+                        $Node(F_a)\leftarrow Node(db_a)$
+                        $InputNode(F_a)\leftarrow InputNode(db_a)$
+                        $Edges(F_a)\leftarrow Edges(db_a)$
+                        $OutputNode(F_a)\leftarrow OutputNode(db_a)$
+                        $visited_a\leftarrow\{\}$\\
+                        $StartNode\leftarrow\{\}$ \\
+                    \ForAll {$u\in Nodes(db_a),s_1$}{
+                            $S\leftarrow visit_a(s_1,u) $\\
+                            $InputNodes(F_a)\leftarrow InputNodes(F_a)\cup \{(s_1,u)\}$\\
+                            \ForAll {$p\in S$}{
+                                $Edges(F_a) \leftarrow Edges(F_a)\cup \{(s_1,u) \xrightarrow{\epsilon} p\}$
+                            }
+                    }
+                    \ForAll {$r\in InputNodes(db_a),s\in States(A)-\{s_1\}$}{
+                        $S\leftarrow visit_a(s,r) $\\
+                        $InputNodes(F_a)\leftarrow InputNodes(F_a)\cup \{(s,r)\}$\\
+                        \ForAll {$p\in S$}{
+                            $Edges(F_a) \leftarrow Edges(F_a)\cup \{(s,r) \xrightarrow{\epsilon} p\}$
+                        }
+                    }
+    \textbf{Step 3} \\At every Site $\alpha$ construct the accessibility graph for $F_a$.\\
+    \textbf{Step 4} \\Every site $\alpha$ sends it accessibility graph to the master and compute the global accessibility graph at the master site.
+    \caption{Modified Dan Scuciu's Algorithm}
+\end{algorithm}
+\\The search function in Algorithm 2 is still the same. In Step2, we start searching with all nodes and starting state $s_1$ in automata. Since $s_1$ has been searched with all nodes in the current site, it's unnecessary to access them again for $InputNodes$.
+\\As a result, there are only two communication steps: Step 1 and Step 4. Since the number of transitions in the automaton  is almost less than 100, broadcasting them to each site is relatively less expensive. So the main cost is from step 4, where each site sends its local accessibility graph to master. The total amount of data exchanged during communications is of size $O(n^2)+O(r)$ for Dan Suciu's algorithm, which is not very accurate for diverse benchmarks. For Algorithm 3, more data exchanged are introduced, which will be analyzed carefully in Evaluation step.
+\section{Execution Process in Spark}
+The execution process in Spark is presented as followed figure \ref{fig:dan-algorithm-spark}:
+\begin{figure}[h!]
+  \caption{Execution Process of Modified Dan Suciu's Algorithm}
+  \label{fig:dan-algorithm-spark}
+  \centering
+    \includegraphics[width=0.8\textwidth]{img/dan-algorithm-spark}
+\end{figure}
+To avoid full shuffle, the automaton is treated as a broad-casted variable in Spark, and is involved in a map-side join on each partition of RDD. Similarly, the operation `subtract' or `union', which also perform full shuffle or need repartitioning at the low level, is replaced with operation "zipPartitions".
+The process can be described in following steps: 
+\begin{enumerate}
+    \item Load automata transitions from HDFS and retrieve edges which have same labels in HBase. Then broadcast automata to each partition in the graph. Perform local join by the flatMap operation, which use the dstids (Destination ID) in graph and automata as key.
+    \item Count the size of search states RDD, if equals 0, stop searching. Otherwise, filter the accessibility graph to send buffer. Zip each partition of search states to VisitedStates and merge each zipped partition.
+    \item Load transitions for next step, then retrieve graph edges by labels. Broadcast transitions to partitions of edges. Then do local join by labels and merge values into a new RDD of search states with starting states as key.
+    \item Zip two RDD of search states of current step and next step, conduct local join and merge the value into a new RDD of search states, using dstid as key.
+    \item Zip new CurrentStates with VisitedStates by partition. For each zipped partition pairs, the partition from new states RDD filters the states which haven't appeared in the partition from VisitedStates, then go back to step 2.
+    \item Send all search states in send buffer to driver node. The driver assembles local results into a global accessibility graph, then filters the search states starting from $s_1$ and ending with accept states.
+\end{enumerate}

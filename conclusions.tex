@@ -1,0 +1,31 @@
+
+\chapter{\label{cha:conclusions}Conclusions and Future Work}
+
+This chapter firstly gives the contributions of the thesis work. Then the conclusion will be discussed concerning research questions. In section 9.3 we will go through the limitation of the project and provide possible improvement direction in Future work.
+
+\section{Contributions}
+The contributions of the project can be summarized as three parts:
+\begin{enumerate}
+    \item We give detailed data model and system architecture to store and evaluate regular path queries with Apache Spark and distributed storage back-ends.
+    \item We customize three algorithms to return pairs of results for regular path queries. Specifically for the Multi-way Join, we deducted the formulas to evaluate regular path query with different situations such as with recurrence and shared variable less than 1. For all algorithms, time complexity and cost expression are analyzed carefully. We point out possible bottlenecks for those algorithms and the data supporting them.
+    \item We optimize the performance of Dan Suciu's algorithm with different partition strategies. The policies cover different approaches such as multi-level partitioning or 'gossip' way. We give a more general cost expression comparing to Dan Suciu's model.
+\end{enumerate}
+
+\section{Conjectures}
+In the evaluation chapter, the cascaded two-way join turns out to be the most scalable algorithm since tasks are evenly distributed, and there is no computation on driver side, although the algorithm conducts frequent full shuffles. The multi-way join shuffles less in most cases while the performance gets worse rapidly with the introduction of recurrence. Dan Suciu's Algorithm makes use of the data locality and seldom does shuffling.
+
+\section{Conclusions}
+For modified Dan Suciu's Algorithm, the computation on the driver side is the bottleneck and cannot handle real huge GAG. In chapter 8, we propose a cost expression that is more accurate to describe network volume comparing to Dan Suciu's model. In the best case, the optimization by METIS strategy reduces the communication size to $30\%$ and overall running time to $50\%$.
+
+\section{Limitations and Future work}
+One limitation of this thesis work is the simple selection of parameters for multiple algorithms:
+\begin{enumerate}
+    \item In multi-way join, we only tested with $k=128$. The running time and shuffle size may vary with different $k$.
+    \item In JabeJa* only one set of parameters initial temperature $T_0$ and cool down speed $\theta$ for simulated annealing is applied. Changing these parameters can relax or restrict the swap conditions in each iteration, which could potentially have huge impact on the final result.
+    \item In JabeJa* we only check five random nodes once there is no suitable neighbor, which might influence the partition quality.
+    \item In GMark benchmark, we only generate graphs with one set of parameters, which means the graphs are in similar shape. The algorithms can be evaluated on more benchmarks with variability.
+\end{enumerate}
+Furthermore, the JabeJa* algorithm is only implemented sequentially and simulate the result. One future research could focus on the asynchronous implementation in GraphChi and discuss the rounds needed for convergence.
+\\Besides, the partition strategies can only optimize for those queries with "light" head. For other kinds of queries, other techniques such as indexes could be used for optimization.
+\\The driver side hangs when the GAG size is of thousands of millions, which means the complex queries on a large graph may be unsolvable for Dan Suciu's Algorithm. One topic for future work is to distribute GAG to cluster again and discuss optimization techniques for the computation.
+\\We only examined the influence of different partition strategies on Dan Suciu's Algorithm. Although the Cascaded 2-way Join and the Multi-way Join only do full shuffles which are irrelevant to partition strategies, it would be interesting to explore if the smart partition algorithms could reduce remote communication and keep shuffling on local nodes as much as possible.

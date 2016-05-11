@@ -1,0 +1,9 @@
+We live in a world of connections where everything shares relationships like follow/subscribe in Social Network or protein interactions in Biology Network. A Graph database embraces relationships and supports low-level join as its nature. Regular Path queries (RPQs) are queries run against graph database, which are written in form of regular expressions based on edge labels and with strong flexibility and expressiveness.
+
+Unlike some graph databases where actual data stored
+and queried using standard relational mechanisms, in this thesis we investigate three distributed algorithms by storing graphs with NoSQL data model and evaluating RPQs with Apache Spark.
+
+The three algorithms are cascaded 2-way join, multi-way join and Dan Suciu's Algorithm. The performance of them regarding to running time and network communication volume are compared, and main bottlenecks are identified. Dan Suciu's algorithm shuffles the least data during evaluation, meanwhile the performance is heavily influenced by the ways of partitioning the graphs. In theory we found that the size of GAG (Global Accessible Graph) collected to driver-side, which affects communication volume and computation scale on driver-side, is related to the number of input-nodes in distributed graph. 
+
+So in this thesis project we also try to optimize the execution of Dan Suciu's algorithm with various partition strategies such as METIS or JabeJa. Based on JabeJa, which tries to minimize the number of cross-edges, we propose a distributed algorithm JabeJa* to minimize the number of input-nodes in graph. In the best cases, those strategies can reduce the communication volume to 30\%, driver-side compuation time to 30\% and overall running time to 50\%.
+
